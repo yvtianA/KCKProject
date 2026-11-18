@@ -5,9 +5,9 @@ setlocal
 rem ============================================================
 rem  一键导出 UE 引擎改动补丁
 rem  引擎仓库：F:\KCKRoot\Engine
-rem  基线    ：仓库初始快照（HEAD）
+rem  基线    ：首次运行时记录的提交（git config kck.baseline）
+rem             即使你中途在 UGit 里提交过，对比基线依然成立
 rem  产物    ：同目录下 engine-<时间戳>.patch
-rem  说明    ：新增文件会被 git add -N 后一并写入补丁
 rem ============================================================
 
 set "ENGINE=F:\KCKRoot\Engine"
@@ -16,42 +16,49 @@ if "%OUTDIR:~-1%"=="\" set "OUTDIR=%OUTDIR:~0,-1%"
 
 where git >nul 2>nul
 if errorlevel 1 goto nogit
-
 if not exist "%ENGINE%\.git" goto noeng
-
 cd /d "%ENGINE%"
+if errorlevel 1 goto noeng
+
+set "BASE="
+for /f %%i in ('git config kck.baseline') do set "BASE=%%i"
+if "%BASE%"=="" (
+    for /f %%i in ('git rev-parse HEAD') do set "BASE=%%i"
+    git config kck.baseline %BASE%
+)
 
 echo.
-echo [1/4] 检查引擎改动 ...
-set "CHANGED=0"
-for /f %%i in ('git status --porcelain ^| find /c /v ""') do set "CHANGED=%%i"
-echo       共 %CHANGED% 处改动
-if "%CHANGED%"=="0" goto nochange
+echo [1/5] 基线提交：%BASE%
+for /f %%i in ('git rev-parse HEAD') do set "HEADNOW=%%i"
+if /i not "%HEADNOW%"=="%BASE%" echo       提示：HEAD 已前移（可能已在 UGit 里提交过），仍按初始基线比对，结果不受影响。
+
+set "TRACKED=0"
+for /f %%i in ('git -c diff.renames=false diff --name-only %BASE% -- . ^| find /c /v ""') do set "TRACKED=%%i"
+set "NEW=0"
+for /f %%i in ('git status --porcelain ^| findstr /b /c:"?? " ^| find /c /v ""') do set "NEW=%%i"
+set /a TOTAL=%TRACKED%+%NEW%
+echo [2/5] 修改或删除 %TRACKED% 个，新增 %NEW% 个
+if "%TOTAL%"=="0" goto nochange
 
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set "STAMP=%%i"
 set "PATCH=%OUTDIR%\engine-%STAMP%.patch"
 set "TMP=%OUTDIR%\_status.tmp"
 
-echo [2/4] 把新增文件纳入补丁 ...
-set "NEWCOUNT=0"
-for /f %%i in ('git status --porcelain ^| findstr /b /c:"?? " ^| find /c /v ""') do set "NEWCOUNT=%%i"
-if "%NEWCOUNT%"=="0" echo       没有新增文件
-if not "%NEWCOUNT%"=="0" echo       发现 %NEWCOUNT% 个新增文件，正在登记 ...
-for /f "tokens=1*" %%a in ('git status --porcelain ^| findstr /b /c:"?? "') do git add -N "%%b" >nul 2>nul
+echo [3/5] 登记新增文件 ...
+if not "%NEW%"=="0" for /f "tokens=1*" %%a in ('git status --porcelain ^| findstr /b /c:"?? "') do git add -N "%%b" >nul 2>nul
 
-echo [3/4] 生成补丁 ...
+echo [4/5] 生成补丁 ...
 git status --porcelain > "%TMP%"
-git diff --binary HEAD > "%PATCH%"
+git -c diff.renames=false diff --binary %BASE% > "%PATCH%"
 git reset -q >nul 2>nul
 
-echo [4/4] 完成
+echo [5/5] 完成
 echo.
 echo       改动清单：
 type "%TMP%"
 echo.
 for %%A in ("%PATCH%") do echo       补丁文件：%%~fA
 for %%A in ("%PATCH%") do echo       补丁大小：%%~zA 字节
-if not "%NEWCOUNT%"=="0" echo       已包含 %NEWCOUNT% 个新增文件
 del "%TMP%" >nul 2>nul
 
 echo.
